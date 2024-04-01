@@ -1,0 +1,19 @@
+# ========= Default Unet config ===================
+---
+architecture_config:
+  model_name: unet
+  encoder_name: timm-efficientnet-b0
+  encoder_depth: 5
+  encoder_weights: imagenet
+  decoder_use_batchnorm: True
+  decoder_channels:
+    - 256
+    - 128
+    - 64
+    - 32
+    - 16
+  decoder_attention_type: None
+  in_channels: 3
+  classes: 3
+  activation: None
+  checkpoint_path: D:/CoursENFI/6eAnnee/Memoire/LearningAI/ImageProcessing/Detectionfruits/configs/weights/weights_unet_config/last.pt
