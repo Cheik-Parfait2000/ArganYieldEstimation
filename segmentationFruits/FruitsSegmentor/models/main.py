@@ -1,30 +1,35 @@
-
 # ================ Import modules ====================
 import torch.nn as nn
 import torch
 import segmentation_models_pytorch as smp
 
-from pathlib import Path 
-from utils import (check_yaml, get_unet_config, build_model_from_dict_config, 
-                  get_device, correct_config_dict_for_model, InvalidFileError)
+from pathlib import Path
 
+from FruitsSegmentor.utils.errors import InvalidFileError
+from FruitsSegmentor.utils.ops import check_yaml, get_unet_config, get_device, build_model_from_dict_config, \
+    correct_config_dict_for_model
 
+from typing import Callable, List, Dict, Union, Optional
+
+DEFAULT_CONFIG = Path(__file__).parent.parent.resolve() / "configs" / "unet_config.yaml"
+DEFAULT_CONFIG = str(DEFAULT_CONFIG).replace("\\", "/")
 
 
 # ================= Build the main class ====================
-
 class SegmentationModel(nn.Module):
     """Class de base pour la segmentation d'images
 
     args:
-    model :
-        - yaml config file containing the models configuration
-        - pretrained_model : .pt file
-    type :
-        - pretrained
-        - config_file
+        model :
+            - yaml config file containing the models configuration
+            - pretrained_model : .pt file
+        type :
+            - pretrained
+            - config_file
+    By default, we used a pretrained unet with its weights
     """
-    def __init__(self, model: None, model_name="unet"):
+
+    def __init__(self, model: str = DEFAULT_CONFIG, model_name="unet"):
         super().__init__()
         self.model_config = model
         self.model_name = model_name
@@ -61,6 +66,7 @@ class SegmentationModel(nn.Module):
             raise InvalidConfigFileError("The file self.model_config is not valid")
         """
         if self.model_name == "unet":
+            config = {}
             if check_yaml(model_architecture="unet", config_file=self.model_config):
                 config = get_unet_config(self.model_config)
                 building_cfg = correct_config_dict_for_model(arch="unet", config_dict=config)
