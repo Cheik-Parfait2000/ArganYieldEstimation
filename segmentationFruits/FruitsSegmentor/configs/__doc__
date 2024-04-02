@@ -1,0 +1,4 @@
+This contains informations about files here :
+
+unet_config.pt :
+    contains the model's architecture configuration along with the pretrained weights
