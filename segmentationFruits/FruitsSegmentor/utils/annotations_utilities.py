@@ -1,68 +1,190 @@
 import os, glob
+from pathlib import Path
+
 import numpy as np
 from PIL import Image, ImageDraw
 from tqdm import tqdm
+
+from PIL.JpegImagePlugin import JpegImageFile
+from PIL.PngImagePlugin import PngImageFile
+# from PIL.Image import Image
 
 import skimage
 from skimage.util.shape import view_as_blocks
 from skimage import io
 from skimage.transform import resize
 
-from typing import List, Tuple
+from typing import List, Tuple, Union
+
+
+def find_good_length(initial_length: int, total_length: int):
+    """
+    Find the good length such that the total_length % good_length == 0
+
+    args :
+        initial_length : longueur initial
+        total_length : la longueur total
+
+    return :
+        good_length : la longueur la plus proche de initial_length de telle sorte que
+        total_length % good_length == 0
+    """
+    good_lower_length = 0
+    good_higher_length = 0
+
+    for width1 in range(initial_length, 0, -1):
+        if total_length % width1 == 0:
+            good_lower_length = width1
+            break
+
+    for width2 in range(initial_length, total_length + 1, 1):
+        if total_length % width2 == 0:
+            good_higher_length = width2
+            break
+
+    good_length = good_lower_length
+    if abs(initial_length - good_higher_length) <= abs(initial_length - good_lower_length):
+        good_length = good_higher_length
+
+    return good_length
+
+
+def tile_image(image: Union[str, JpegImageFile, PngImageFile, Image.Image, np.ndarray],
+               tile_height=None, tile_width=None):
+    """
+    Tuiler une image : la diviser en blocks de n_rows et n_columns
+    Les lignes ou colonnes restantes sont ré-attribuées au block les plus proches
+
+    image_name: name of the image with its extension
+    n_rows: number of rows
+    n_columns: number of columns
+    save_path: path to save the image
+    """
+    if isinstance(image, str):
+        if os.path.exists(image):
+            image = io.imread(image)
+        else:
+            raise FileNotFoundError("Can't find the file")
+
+    elif isinstance(image, JpegImageFile | PngImageFile | Image.Image):
+        image = np.asarray(image)
+    else:
+        raise TypeError(
+            "image must be a str, PIL.JpegImagePlugin.JpegImageFile, PIL.PngImagePlugin.PngImageFile, \
+            PIL.Image.Image or np.ndarray")
+
+    # Calcul de la taille de chaque patch
+
+    image_shape = image.shape
+
+    # path_height = image_shape[0] // n_rows
+    # patch_width = image_shape[1] // n_columns
+
+    # Find the patch width and height close to the initial values provided.
+    patch_width = find_good_length(initial_length=tile_width, total_length=image_shape[1])
+    path_height = find_good_length(initial_length=tile_height, total_length=image_shape[0])
+
+    n_rows = image_shape[0] // path_height
+    n_columns = image_shape[1] // patch_width
+
+    block_shape = []
+    if len(image_shape) == 3:
+        block_shape = (path_height, patch_width, image_shape[2])
+    else:
+        block_shape = (path_height, patch_width)
+
+    # Tuiler l'image en pach : n_rows, n_columns, channels
+    patches = view_as_blocks(image, block_shape=block_shape)
+
+    return {"patches": patches, "n_rows": n_rows, "n_columns": n_columns, "block_shape": block_shape}
 
 
 class MaskImageConfig(object):
     """
-    A configuration class for the mask image.
+  A configuration class for the mask image.
 
-    We can define its outline width, background color, fill color, and outline color.
+  We can define its outline width, background color, fill color, and outline color.
 
-    "#000000" -> 0 is the default background color.
-    "#808080" -> 128 is the default fill color.
-    "#ffffff" -> 255 is the default outline color.
+  "#000000" -> 0 is the default background color.\n
+  "#808080" -> 128 is the default fill color.\n
+  "#ffffff" -> 255 is the default outline color.
+  """
+
+    def __init__(self, outline_width: int = 3, background_color: str = "#000000",
+                 fill_color: str = "#808080", outline_color: str = "#ffffff"):
+        """
+    Create a mask image configuration.
+    Args:
+      outline_width: the outline width of the objects in the mask image.
+      background_color: the background color of the mask image. For what is not considered as objects
+      fill_color: the fill color of the given objects in the mask image.
+      outline_color: the outline color of the given objects mask image.
+
     """
-    def __init__(self):
-        self.outline_width: int = 3
-        self.background_color: str = "#000000"
-        self.fill_color: str = "#808080"
-        self.outline_color: str = "#ffffff"
+        self.outline_width = outline_width
+        self.background_color = background_color
+        self.fill_color = fill_color
+        self.outline_color = outline_color
 
 
-class Data(object):
+"""
+=================================== data preparation class ===================================
+"""
+
+
+def change_path_separator(data: str | list, sep_to_replace="\\", new_sep="/"):
     """
-        A class representing annotated images
+
+    :param data:
+    :param sep_to_replace:
+    :param new_sep:
+    :return:
+        data: with the new separator
+    """
+
+    def change_single_path_sep(path, old_sep, new_sep_):
+        return str(path).replace(old_sep, new_sep_)
+
+    if isinstance(data, str):
+        return change_single_path_sep(data, sep_to_replace, new_sep)
+    elif isinstance(data, list):
+        return list(map(lambda e: change_single_path_sep(e, sep_to_replace, new_sep), data))
+    else:
+        raise NotImplementedError("Can only modify for str paths or list of str paths")
+
+
+class DataPreparator(object):
+    """
+        A class to prepare data for training and validation
         It is characterised by its folder where we can find images and annotations in a specific format
     """
-    def __init__(self, data_folder: str, mask_annotation_config: MaskImageConfig = MaskImageConfig(),\
-        masks_folder_name: str = "labels_masks", tiled_data_folder_name: str = "tuiles", data_format: str = "yolov8"):
+
+    def __init__(self, data_folder: str, mask_annotation_config: MaskImageConfig = None, data_format: str = "yolov8"):
         self.data_format = data_format
         self.data_folder = data_folder
         self.images = None
         self.annotations = None
         self.mask_annotation_config = mask_annotation_config
-        self.masks_folder_name = masks_folder_name
-        self.tiled_data_folder_name = tiled_data_folder_name
 
     def get_images_annotations(self):
         """
-        Get the images and annotations
+          Get the images and annotations
         """
         if self.data_format == "yolov8":
-            self.images = glob.glob(os.path.join(self.data_folder, "images")+"/*.jpg")
-            self.annotations = glob.glob(os.path.join(self.data_folder, "labels")+"/*.txt")
+            self.images = list(map(str, (Path(self.data_folder) / "images").glob("*jpg")))
+            self.annotations = list(map(str, (Path(self.data_folder) / "labels").glob("*.txt")))
 
             return self.images, self.annotations
         else:
-            raise NotImplementedError(f"Cannot create annotations for {self.data_format}. Please implement that section here.")
-
+            raise NotImplementedError
 
     def get_polygons(self, path_to_label_file: str, image_path: str):
         """
-        Permet de récupérer les polygones présents dans un fichier donnée:
-        return:
-        polygones: [[(x, y), (x, y), (x, y)], ...]
+          Permet de récupérer les polygones présents dans un fichier donnée:
+          return:
+            polygones: [[(x, y), (x, y), (x, y)], ...]
         """
-        if Path(path_to_label_file).exists():
+        if os.path.exists(path_to_label_file):
             if self.data_format == "yolov8":
                 with open(path_to_label_file) as file:
                     content = file.readlines()
@@ -72,24 +194,24 @@ class Data(object):
                         width, height = imArray.shape[0], imArray.shape[1]
                         for e in content:
                             pol = [float(i) for i in e.split(" ")[1:]]
-                            pol = [(int(pol[j]*width), int(pol[j+1]*height)) for j in range(0, len(pol), 2)]
+                            pol = [(int(pol[j] * width), int(pol[j + 1] * height)) for j in range(0, len(pol), 2)]
                             polygones.append(pol)
 
                         return polygones
-        else:
-            raise NotImplementedError("The data format is not supported")
+            else:
+                raise NotImplementedError("The data format is not supported")
 
     def create_img_mask(self, img_path, polygones_path):
         """
-        Créer un mask d'image à partir d'une image et des ses annotations en polygone
+            Créer un mask d'image à partir d'une image et des ses annotations en polygone
 
-        img_path : chemin de l'image
-        polygones_path: chemin des polygones de l'image
+            img_path : chemin de l'image
+            polygones_path: chemin des polygones de l'image
 
-        background_color: the background color of the image
-        fill_color: couleur de remplissage du polygone
-        outline_color: couleur de la ligne de contour du polygone
-        outline_width: epaisseur de la ligne de contour
+            background_color: the background color of the image
+            fill_color: couleur de remplissage du polygone
+            outline_color: couleur de la ligne de contour du polygone
+            outline_width: epaisseur de la ligne de contour
         """
 
         # Récupération des polygones correspondant à l'image
@@ -107,41 +229,83 @@ class Data(object):
         # Création du masque:
         # mode=L (8-bit pixels, grayscale)
         maskImage = Image.new(mode='L', size=(imArray.shape[1], imArray.shape[0]), color=background_color)
-        for pol in data_polygones: # Dessiner chaque polygone sur l'image
+        for pol in data_polygones:  # Dessiner chaque polygone sur l'image
             ImageDraw.Draw(maskImage).polygon(pol, outline=outline_color, fill=fill_color, width=outline_width)
             ImageDraw.Draw(maskImage).polygon(pol, outline=outline_color, fill=fill_color, width=outline_width)
 
         return maskImage
 
-    def create_mask_annotations(self):
+    def create_mask_annotations(self, tile: bool = True, tile_height=256, tile_width=256,
+                                classes_to_satisfy: list = [128],
+                                save_path=None, sub_folder=None):
         """
-        Create masks from polygon annotations
+            Create masks from polygon annotations
+            tile: if True, the images will be tiled
+            tile_height: the width of the tile
+            tile_width: the heigth of each tile.
+                Note : tile_height and tile_width can be modified in the process
+                if the width % tile_width and/or heigth % tile_height are not equal to 0.
+            classes_to_satisfy : Classes values that must be in the tiles. Otherwise the tile masks with their
+                corresponding image patch won't be saved
+            save_path: path to save the masks
+            sub_folder: sub folder to save the data in case the data is tiled
         """
+        if save_path is None:
+            save_path = self.data_folder
         if self.data_format == "yolov8":
             images, annotations = self.get_images_annotations()
+            images, annotations = change_path_separator(images), change_path_separator(annotations)
             if len(images) > 0 and len(annotations) > 0:
-                if not os.path.exists(os.path.join(self.data_folder, "labels_masks")):
-                    # Créér un sous dossier pour sauvegarder les masks
-                    os.mkdir(os.path.join(self.data_folder, "labels_masks"))
 
-                loop = tqdm(enumerate(images), total=len(images), desc="creating annotations ...")
+                # Gestion des dossiers pour le stockage des données
+                if tile:
+                    if sub_folder is None and save_path == self.data_folder:
+                        raise Exception("The save path is the same as the data folder. you must enter a sub_folder!")
+                    elif save_path != self.data_folder and sub_folder is not None:
+                        (Path(save_path) / sub_folder).mkdir(exist_ok=True)
+                        (Path(save_path) / sub_folder / "images").mkdir(exist_ok=True)
+                        (Path(save_path) / sub_folder / "labels_masks").mkdir(exist_ok=True)
+
+                        save_path = str(Path(save_path) / sub_folder)
+                    else:
+                        Path(save_path).mkdir(exist_ok=True)
+                        save_path = str(Path(save_path) / sub_folder)
+                else:
+                    (Path(save_path) / "labels_masks").mkdir(exist_ok=True)
+                    save_path = str(Path(save_path) / "labels_masks")
+
+                loop = tqdm(enumerate(images), total=len(images), desc=f"Saving data to -> {save_path}...")
                 for idx, image_path in loop:
                     image_name_sans_extension = image_path.split("/")[-1][:-4]
                     label_path = os.path.join(self.data_folder, f"labels/{image_name_sans_extension}.txt")
 
-                    loop.set_postfix(processing_for = f"{image_name_sans_extension}")
-
                     # Si l'image a une annotation et que cette annotation n'est pas vide
                     if label_path in annotations and self.get_polygons(label_path, image_path):
-                        path_to_save = os.path.join(self.data_folder, f"labels_masks/{image_name_sans_extension}.png")
                         mask_pil_image = self.create_img_mask(image_path, label_path)
-                        mask_pil_image.save(path_to_save)
-                    else:
-                        loop.set_postfix(skip_for = f"{image_name_sans_extension}")
-        else:
-           raise NotImplementedError("Can only process yolov8 annotation format")
+                        if tile:
+                            # Create the save path for images and labels_masks
+                            save_images_path = str(Path(save_path) / "images")
+                            save_masks_path = str(Path(save_path) / "labels_masks")
 
-    def create_tiled_data(self, n_rows=3, n_columns=3):
+                            # Create these paths if they do not exists
+                            (Path(save_path) / "images").mkdir(exist_ok=True)
+                            (Path(save_path) / "labels_masks").mkdir(exist_ok=True)
+
+                            # Tile images and save them in their paths
+                            image_name = image_name_sans_extension + ".png"
+                            patches_sans_annotation = self.tile_image(mask_pil_image, image_name=image_name,
+                                                                      tile_height=tile_height,
+                                                                      tile_width=tile_width, save_path=save_masks_path,
+                                                                      classes_to_satisfy=classes_to_satisfy)
+                            self.tile_image(image_path, image_name=None, tile_height=tile_height, tile_width=tile_width,
+                                            save_path=save_images_path, patches_to_discard=patches_sans_annotation)
+                        else:
+                            path_to_save = os.path.join(save_path, f"{image_name_sans_extension}.png")
+                            mask_pil_image.save(path_to_save)
+                    else:
+                        loop.set_postfix(skip_for=f"{image_name_sans_extension}")
+
+    def create_tiled_data(self, tile_height=256, tile_width=256):
         """
         Create tiled data : will tile the images and masks into parts for training or validation
         """
@@ -165,69 +329,109 @@ class Data(object):
         images_formats = [".jpg", ".png"]
 
         for images_path, save_path, images_format in zip(paths, save_paths, images_formats):
-            loop = tqdm(glob.glob(os.path.join(images_path, "*"+images_format)), total = len(glob.glob(os.path.join(images_path, "*"+images_format))))
+            loop = tqdm(glob.glob(os.path.join(images_path, "*" + images_format)),
+                        total=len(glob.glob(os.path.join(images_path, "*" + images_format))))
             for img_path in loop:
                 loop.set_description(f"Processing images of : {images_path}")
-                self.tile_image(img_path, n_rows=3, n_columns=3, save_path=save_path)
+                self.tile_image(img_path, tile_height=3, tile_width=3, save_path=save_path)
 
-
-
-    def tile_image(self, image_path, n_rows, n_columns, save_path=None):
+    def tile_image(self, image: Union[
+        str, JpegImageFile, PngImageFile, Image.Image, np.ndarray],
+                   image_name=None, tile_height=None, tile_width=None, save_path=None,
+                   classes_to_satisfy: List[int] = [], patches_to_discard: List[str] = None):
         """
         Tuiler une image : la diviser en blocks de n_rows et n_columns
         Les lignes ou colonnes restantes sont ré-attribuées au block les plus proches
+
+        image_name: name of the image with its extension
+        n_rows: number of rows
+        n_columns: number of columns
+        save_path: path to save the image
         """
-        if os.path.exists(image_path):
-            image = io.imread(image_path)
-
-            # Calcul de la taille de chaque patch
-
-            image_shape = image.shape
-
-            path_height = image_shape[0] // n_rows
-            patch_width = image_shape[1] // n_columns
-
-            remainder_rows = image_shape[0] % n_rows
-            remainder_columns = image_shape[1] % n_columns
-
-            block_shape = []
-            if len(image_shape) == 3:
-                block_shape = (path_height, patch_width, image_shape[2])
+        save_file_name = ""
+        if isinstance(image, str):
+            if os.path.exists(image):
+                save_file_name = image
             else:
-                block_shape = (path_height, patch_width)
+                raise FileNotFoundError("Can't find the file")
 
-            # Tuiler l'image en pach : n_rows, n_columns, channels
-            patches = view_as_blocks(image, block_shape=block_shape)
+        elif isinstance(image, JpegImageFile | PngImageFile | Image.Image):
+            if image_name is None:
+                raise ValueError("image_name must be defined")
+            save_file_name = image_name
 
-            if save_path != None:
-                for r in range(n_rows):
-                    for c in range(n_columns):
-                        file_name = image_path.split("/")[-1][:-4] + f"_row{r}_column{c}" + '.' + image_path.split('.')[-1]
-                        io.imsave(os.path.join(save_path, file_name), patches[r, c].reshape(block_shape))
-            else:
-                patchs = []
-                for r in range(n_rows):
-                    for c in range(n_columns):
-                        patchs.append(patches[r, c].reshape(block_shape))
-
-                return patchs
+        elif isinstance(image, np.ndarray):
+            if image_name is None:
+                raise ValueError("image_name must be defined")
+            save_file_name = image_name
         else:
-            raise FileNotFoundError("Can't find the file")
+            raise TypeError(
+                "image must be a str, PIL.JpegImagePlugin.JpegImageFile, PIL.PngImagePlugin.PngImageFile, \
+                PIL.Image.Image or np.ndarray")
+        if isinstance(classes_to_satisfy, list):
+            for e in classes_to_satisfy:
+                if not isinstance(e, int):
+                    raise ValueError("Classes to satisfy must be a list of integers")
+        else:
+            raise ValueError("Classes to satisfy must be a list of integers")
 
-    def getData(self, type: str="tuiles"):
+        # Tuiler l'image en patch : n_rows, n_columns, channels
+        tiling_result = tile_image(image=image, tile_height=tile_height, tile_width=tile_width)
+
+        n_rows = tiling_result["n_rows"]
+        n_columns = tiling_result["n_columns"]
+        patches = tiling_result["patches"]
+        block_shape = tiling_result["block_shape"]
+
+        if save_path is not None:
+            # Patches that do not contain some classes
+            non_valid_patches = []
+            for r in range(n_rows):
+                for c in range(n_columns):
+                    patch_to_save = patches[r, c].reshape(block_shape)
+                    file_name = save_file_name.split("/")[-1][:-4] + f"_row{r}_column{c}" + '.' + \
+                                save_file_name.split('.')[-1]
+                    if len(classes_to_satisfy) > 0:
+                        uniques_classes = np.unique(patch_to_save).tolist()
+                        save_patch = True
+                        for cls in classes_to_satisfy:
+                            if cls not in uniques_classes:
+                                save_patch = False
+                                non_valid_patches.append(file_name[:-4])
+                                break
+                        if save_patch:
+                            file_path = os.path.join(save_path, file_name).replace("\\", "/")
+                            io.imsave(file_path, patch_to_save,
+                                      check_contrast=False)
+                    else:
+                        if file_name[:-4] not in patches_to_discard:
+                            file_path = os.path.join(save_path, file_name).replace("\\", "/")
+                            io.imsave(file_path, patch_to_save,
+                                      check_contrast=False)
+            return non_valid_patches
+        else:
+            patchs = []
+            for r in range(n_rows):
+                for c in range(n_columns):
+                    patchs.append(patches[r, c].reshape(block_shape))
+
+            return patchs
+
+    def getData(self, type: str = "tuiles"):
         """
         Get the list of data : images and masks
         to build a dataset
         """
         if type == "tuiles":
             if os.path.exists(self.data_folder):
-                images_paths = glob.glob(os.path.join(self.data_folder, "tuiles", "images")+"/*.jpg")
-                labels_paths = glob.glob(os.path.join(self.data_folder, "tuiles", "masks")+"/*.png")
+                images_paths = glob.glob(os.path.join(self.data_folder, "tuiles", "images") + "/*.jpg")
+                labels_paths = glob.glob(os.path.join(self.data_folder, "tuiles", "masks") + "/*.png")
 
                 liste_images = []
                 liste_annotations = []
                 for img_path in images_paths:
-                    label_path = os.path.join(self.data_folder, "tuiles", "masks", img_path.split("/")[-1][:-4]+".png")
+                    label_path = os.path.join(self.data_folder, "tuiles", "masks",
+                                              img_path.split("/")[-1][:-4] + ".png")
                     if label_path in labels_paths:
                         liste_images.append(img_path)
                         liste_annotations.append(label_path)

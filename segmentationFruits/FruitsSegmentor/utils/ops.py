@@ -123,7 +123,7 @@ def preprocess_input_for_prediction(image: Union[str, np.ndarray, torch.Tensor],
         transforms_callback: a  callable that can accept a numpy array and return a torch.Tensor
             with parameters <image_array, x_size, y_size, add_batch_dimension> in this order
 
-    return torch.Tensor
+    return torch.Tensor of type torch.float (float32)
 
     """
     if isinstance(image, str):
