@@ -273,12 +273,10 @@ class DataPreparator(object):
                 else:
                     (Path(save_path) / "labels_masks").mkdir(exist_ok=True)
                     save_path = str(Path(save_path) / "labels_masks")
-
                 loop = tqdm(enumerate(images), total=len(images), desc=f"Saving data to -> {save_path}...")
                 for idx, image_path in loop:
                     image_name_sans_extension = image_path.split("/")[-1][:-4]
-                    label_path = os.path.join(self.data_folder, f"labels/{image_name_sans_extension}.txt")
-
+                    label_path = os.path.join(self.data_folder, f"labels/{image_name_sans_extension}.txt").replace("\\", "/")
                     # Si l'image a une annotation et que cette annotation n'est pas vide
                     if label_path in annotations and self.get_polygons(label_path, image_path):
                         mask_pil_image = self.create_img_mask(image_path, label_path)
@@ -286,10 +284,6 @@ class DataPreparator(object):
                             # Create the save path for images and labels_masks
                             save_images_path = str(Path(save_path) / "images")
                             save_masks_path = str(Path(save_path) / "labels_masks")
-
-                            # Create these paths if they do not exists
-                            (Path(save_path) / "images").mkdir(exist_ok=True)
-                            (Path(save_path) / "labels_masks").mkdir(exist_ok=True)
 
                             # Tile images and save them in their paths
                             image_name = image_name_sans_extension + ".png"
@@ -299,6 +293,7 @@ class DataPreparator(object):
                                                                       classes_to_satisfy=classes_to_satisfy)
                             self.tile_image(image_path, image_name=None, tile_height=tile_height, tile_width=tile_width,
                                             save_path=save_images_path, patches_to_discard=patches_sans_annotation)
+
                         else:
                             path_to_save = os.path.join(save_path, f"{image_name_sans_extension}.png")
                             mask_pil_image.save(path_to_save)
