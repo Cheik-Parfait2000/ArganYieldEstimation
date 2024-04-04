@@ -262,6 +262,7 @@ class DataPreparator(object):
                     if sub_folder is None and save_path == self.data_folder:
                         raise Exception("The save path is the same as the data folder. you must enter a sub_folder!")
                     elif save_path != self.data_folder and sub_folder is not None:
+                        Path(save_path).mkdir(exist_ok=True)
                         (Path(save_path) / sub_folder).mkdir(exist_ok=True)
                         (Path(save_path) / sub_folder / "images").mkdir(exist_ok=True)
                         (Path(save_path) / sub_folder / "labels_masks").mkdir(exist_ok=True)
@@ -299,36 +300,6 @@ class DataPreparator(object):
                             mask_pil_image.save(path_to_save)
                     else:
                         loop.set_postfix(skip_for=f"{image_name_sans_extension}")
-
-    def create_tiled_data(self, tile_height=256, tile_width=256):
-        """
-        Create tiled data : will tile the images and masks into parts for training or validation
-        """
-        save_base_dir = os.path.join(self.data_folder, self.tiled_data_folder_name)
-        save_imgs_path = os.path.join(save_base_dir, "images")
-        save_masks_path = os.path.join(save_base_dir, "masks")
-
-        # Create folders for the tiles
-        if not os.path.exists(save_base_dir):
-            os.mkdir(save_base_dir)
-        if not os.path.exists(save_imgs_path):
-            os.mkdir(save_imgs_path)
-        if not os.path.exists(save_masks_path):
-            os.mkdir(save_masks_path)
-
-        images_path = os.path.join(self.data_folder, "images")
-        annotations_path = os.path.join(self.data_folder, "labels_masks")
-
-        paths = [images_path, annotations_path]
-        save_paths = [save_imgs_path, save_masks_path]
-        images_formats = [".jpg", ".png"]
-
-        for images_path, save_path, images_format in zip(paths, save_paths, images_formats):
-            loop = tqdm(glob.glob(os.path.join(images_path, "*" + images_format)),
-                        total=len(glob.glob(os.path.join(images_path, "*" + images_format))))
-            for img_path in loop:
-                loop.set_description(f"Processing images of : {images_path}")
-                self.tile_image(img_path, tile_height=3, tile_width=3, save_path=save_path)
 
     def tile_image(self, image: Union[
         str, JpegImageFile, PngImageFile, Image.Image, np.ndarray],
@@ -412,25 +383,3 @@ class DataPreparator(object):
 
             return patchs
 
-    def getData(self, type: str = "tuiles"):
-        """
-        Get the list of data : images and masks
-        to build a dataset
-        """
-        if type == "tuiles":
-            if os.path.exists(self.data_folder):
-                images_paths = glob.glob(os.path.join(self.data_folder, "tuiles", "images") + "/*.jpg")
-                labels_paths = glob.glob(os.path.join(self.data_folder, "tuiles", "masks") + "/*.png")
-
-                liste_images = []
-                liste_annotations = []
-                for img_path in images_paths:
-                    label_path = os.path.join(self.data_folder, "tuiles", "masks",
-                                              img_path.split("/")[-1][:-4] + ".png")
-                    if label_path in labels_paths:
-                        liste_images.append(img_path)
-                        liste_annotations.append(label_path)
-
-                return sorted(liste_images), sorted(liste_annotations)
-        else:
-            raise NotImplementedError("Not implemented")

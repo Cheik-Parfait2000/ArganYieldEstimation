@@ -1,9 +1,13 @@
+import glob
+import os
 from typing import List, Dict
 from torch.utils.data import Dataset, DataLoader
+from .annotations_utilities import change_path_separator
 import torch
 import numpy as np
 from PIL import Image
 import albumentations as A
+from pathlib import Path
 
 """Data Documentation"""
 
@@ -29,16 +33,66 @@ class DatasetConfig(object):
                  num_classes: int = 3, classes_pixels_values: List[int] = [0, 128, 255],
                  classes_names: List[str] = ["background", "fruit", "edge"],
                  labels_mapping: Dict[int, int] = {0: 0, 128: 1, 255: 2},
-                 data=None):
+                 data_folder=None):
         self.BATCH_SIZE = batch_size
         self.IMAGE_SIZE = image_size
-        self.AUGMENTATIONS = augmentations(self.IMAGE_SIZE)
+        if augmentations is not None:
+            self.AUGMENTATIONS = augmentations(self.IMAGE_SIZE)
+        else:
+            self.AUGMENTATIONS = self.getAugs(self.IMAGE_SIZE)
         self.NUM_CLASSES = num_classes
         self.CLASSES_PIXELS_VALUES = classes_pixels_values
         self.CLASSES_NAMES = classes_names
         self.LABELS_MAPPING = labels_mapping
 
-        self.LIST_IMAGES, self.LIST_ANNOTATIONS = data.getData()
+        self.data_folder = change_path_separator(data_folder)
+        self.LIST_IMAGES, self.LIST_ANNOTATIONS = self.getData()
+
+    def getData(self):
+        """
+        Récupérer la liste des images et des annotations à partir du dossier contenant les images.
+        le dossier doit être comme suit:
+            images
+            labels_masks
+        :return:  absolute paths of
+            liste_images list()
+            liste_annotations list()
+        """
+        if os.path.exists(self.data_folder):
+            if not os.path.exists(os.path.join(self.data_folder, "images")) or not os.path.exists(os.path.join(self.data_folder, "labels_masks")):
+                raise FileNotFoundError(f"Cannot find a subfolder nammed <images> or <labels_masks> in your folder {self.data_folder}!")
+            images_paths = list((Path(self.data_folder) / "images").glob("*.jpg"))
+            labels_paths = list((Path(self.data_folder) / "labels_masks").glob("*.png"))
+
+            images_paths = change_path_separator(images_paths)
+            labels_paths = change_path_separator(labels_paths)
+
+            if len(images_paths) == 0 | len(labels_paths) == 0:
+                raise Exception(f"Images or masks are missing! Number of images = {len(images_paths)} \
+                                and Number of masks = {len(labels_paths)}.Please the data path! \
+                                Masks should be .png files and images .jpg files")
+
+            liste_images = []
+            liste_annotations = []
+            for img_path in images_paths:
+                label_path = os.path.join(self.data_folder, "labels_masks",
+                                          img_path.split("/")[-1][:-4] + ".png").replace("\\", "/")
+                if label_path in labels_paths:
+                    liste_images.append(img_path)
+                    liste_annotations.append(label_path)
+            return sorted(liste_images), sorted(liste_annotations)
+        else:
+            raise FileNotFoundError(f"Le dossier {self.data_folder} est introuvable !")
+
+    def getAugs(self, image_size):
+        """
+
+        :param image_size:
+        :return:
+        """
+        return A.Compose([
+                    A.Resize(image_size, image_size)
+        ])
 
 
 """CUSTOM DATASET"""
