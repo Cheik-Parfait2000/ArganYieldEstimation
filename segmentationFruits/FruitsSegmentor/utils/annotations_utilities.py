@@ -49,6 +49,38 @@ def find_good_length(initial_length: int, total_length: int):
     return good_length
 
 
+def find_closest_dividor(initial_number: int, divisor: int):
+    """
+    Find a number that can be divided by the dividor such that the this number is the closest to initial_number
+
+    args :
+        initial_number : le nombre initial à diviser par le diviseur
+        divisor : le diviseur
+
+    return :
+        good_length : la longueur la plus proche de initial_length de telle sorte que
+        total_length % good_length == 0
+    """
+    good_lower_length = 0
+    good_higher_length = 0
+
+    for width1 in range(initial_number, 0, -1):
+        if width1 % divisor == 0:
+            good_lower_length = width1
+            break
+
+    for width2 in range(initial_number, initial_number + divisor + 1, 1):
+        if width2 % divisor == 0:
+            good_higher_length = width2
+            break
+
+    good_length = good_lower_length
+    if abs(initial_number - good_higher_length) <= abs(initial_number - good_lower_length):
+        good_length = good_higher_length
+
+    return good_length
+
+
 def tile_image(image: Union[str, JpegImageFile, PngImageFile, Image.Image, np.ndarray],
                tile_height=None, tile_width=None):
     """
@@ -68,6 +100,8 @@ def tile_image(image: Union[str, JpegImageFile, PngImageFile, Image.Image, np.nd
 
     elif isinstance(image, JpegImageFile | PngImageFile | Image.Image):
         image = np.asarray(image)
+    elif isinstance(image, np.ndarray):
+        pass
     else:
         raise TypeError(
             "image must be a str, PIL.JpegImagePlugin.JpegImageFile, PIL.PngImagePlugin.PngImageFile, \
@@ -97,6 +131,28 @@ def tile_image(image: Union[str, JpegImageFile, PngImageFile, Image.Image, np.nd
     patches = view_as_blocks(image, block_shape=block_shape)
 
     return {"patches": patches, "n_rows": n_rows, "n_columns": n_columns, "block_shape": block_shape}
+
+
+def concat_tiles(tiles_list, n_rows, n_cols):
+  """
+  Concatenate tiles
+
+  input:
+    tiles_list : list of tiles [t1, t2, t3]
+    n_rows : number of rows
+    n_cols : number of columns
+
+    n_rows * n_cols = len(tiles_list)
+    """
+  if len(tiles_list) != n_rows * n_cols:
+    raise ValueError(f"Number of tiles must be equal to n_rows*n_columns = {n_rows*n_cols}")
+  # Create a list of blocks concatenated horizontally
+  h_blocks = [numpy.hstack(tiles_list[i*n_cols:(i+1)*n_cols]) for i in range(n_rows)]
+
+  # Créér l'image finale en empilant ces blocks horizontal verticalement
+  final_image = numpy.vstack(h_blocks)
+
+  return final_image
 
 
 class MaskImageConfig(object):

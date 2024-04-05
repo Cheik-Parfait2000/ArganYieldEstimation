@@ -2,14 +2,18 @@
 import torch.nn as nn
 import torch
 import segmentation_models_pytorch as smp
+from skimage.transform import resize
 
 from pathlib import Path
 
 from FruitsSegmentor.utils.errors import InvalidFileError
 from FruitsSegmentor.utils.ops import check_yaml, get_unet_config, get_device, build_model_from_dict_config, \
-    correct_config_dict_for_model
+    correct_config_dict_for_model, preprocess_input_for_prediction
+from FruitsSegmentor.utils.annotations_utilities import tile_image, concat_tiles, find_closest_dividor
 
 from typing import Callable, List, Dict, Union, Optional
+import numpy as np
+from skimage import io
 
 DEFAULT_CONFIG = Path(__file__).parent.parent.resolve() / "configs" / "unet_config.pt"
 DEFAULT_CONFIG = str(DEFAULT_CONFIG).replace("\\", "/")
@@ -37,18 +41,101 @@ class SegmentationModel(nn.Module):
 
         # Build the model form the configuration
         self._build_model()
+        self.to(get_device())
 
-    def predict(self, image: str = None, tilling: bool = False, n_rows: int = None, n_cols: int = None, save_path=None):
+    def predict(self, image: Union[str, np.ndarray] = None, tilling: bool = False, tile_size: int = 360,
+                prediction_size: int = 640):
         """
         Effectuer une prédiction en utilisant le modèle pré-entrainé.
-
-        image : chemin vers l'image à utilisé
+        image : chemin vers l'image à utilisé ou une image numpy
         tilling : spécifie si on doit faire une prédiction en tuillage. Si True, on doit spécifier n_rows et n_cols
-        n_rows et n_cols : nombre de lignes et colonnes de la tuile. tuile de 2 * 2 découpe l'image en 4 blocks
-
-        save_path : chemin vers le dossier où enregistrer les prédictions
+        tile_size: nombre de lignes et colonnes de la tuile. tuile de 2 * 2 découpe l'image en 4 blocks
+        prediction_size: taille à laquelle l'image doit être redimensionnée lors pour la prédiction
         """
-        pass
+        if isinstance(image, str):
+            if Path(image).exists():
+                image = image.replace("\\", "/")
+                image_array = io.imread(image)
+            else:
+                raise FileNotFoundError(f"{image} was not found! please check the good path of your file")
+        elif isinstance(image, np.ndarray):
+            image_array = image
+        else:
+            raise TypeError("image must be a string or a numpy array")
+
+        # Check for tile, tile_size, prediction_size and save_path
+        if isinstance(tilling, bool):
+            if tilling:
+                if not isinstance(tile_size, int):
+                    raise TypeError("tile_size must be an integer")
+                if self.model_building_config["classes"] != 3:
+                    raise ValueError("Only 3 classes are supported for tuiling!")
+        else:
+            raise TypeError("tilling must be a boolean")
+
+        if not isinstance(prediction_size, int):
+            raise TypeError("prediction_size must be an integer")
+
+        # Check the dimensions of the image : HWC with C=3
+        if len(image_array.shape) != 3:
+            raise InvalidShapeError(f"The image is expected to have 3 channels, found {image_array.shape[-1]}")
+        elif image_array.shape[-1] != 3:
+            raise InvalidShapeError(f"The image is expected to have 3 channels, found {image_array.shape[-1]}")
+
+        # Put the model on eval mode
+        self.eval()
+        original_shape = image_array.shape
+        prediction_size = find_closest_dividor(initial_number=prediction_size, divisor=32)
+        if tilling:
+            # Tile the image :
+            tiling_results = tile_image(image=image_array, tile_height=tile_size, tile_width=tile_size)
+            tiles, n_rows, n_columns, block_shape = tiling_results.values()
+            tile_predictions = []
+            for r in range(n_rows):
+                for c in range(n_columns):
+                    tile = tiles[r, c].reshape(block_shape)
+                    # Preprocess the tile for prédiction
+                    tile_tensor = preprocess_input_for_prediction(image=tile, width=prediction_size,
+                                                                  height=prediction_size, normalize=True)
+                    with torch.no_grad():
+                        # Predict the mask
+                        tile_tensor = tile_tensor.to(get_device())
+                        tile_mask = self.model(tile_tensor)
+                        tile_mask = torch.squeeze(tile_mask, dim=0)
+                        tile_mask = torch.softmax(tile_mask, dim=0)
+                        tile_mask = torch.argmax(tile_mask, dim=0)
+                        tile_mask = torch.squeeze(tile_mask, dim=0).cpu().numpy()
+                        # Resize the tile back to its original size
+                        tile_mask = resize(tile_mask, (block_shape[0], block_shape[1]), preserve_range=True).astype(
+                            np.uint8)
+                        # Add the prediction to the list of predictions
+                        tile_predictions.append(tile_mask)
+            # Concat tiles predictions
+            prediction = concat_tiles(tile_predictions, n_rows, n_columns)
+            return prediction
+        else:
+            # Preprocess the image
+            image_tensor = preprocess_input_for_prediction(image=image_array, width=prediction_size,
+                                                           height=prediction_size, normalize=True)
+            with torch.no_grad():
+                # Predict the mask
+                image_tensor = image_tensor.to(get_device())
+                mask = self.model(image_tensor)
+            # Delete the batch dimension
+            mask = torch.squeeze(mask, dim=0)
+            # Apply an activation function
+            if self.model_building_config["classes"] == 1:
+                mask = torch.sigmoid(mask)
+                mask = torch.round(mask)
+            else:
+                mask = torch.softmax(mask, dim=0)
+                mask = torch.argmax(mask, dim=0)
+
+            # Convert the mask to a numpy array
+            mask = torch.squeeze(mask, dim=0).cpu().numpy()
+            mask = resize(mask, (original_shape[0], original_shape[1]), preserve_range=True).astype(np.uint8)
+            # Convert the mask to a numpy array
+            return mask
 
     def _build_model(self):
         """Build the model from a configuration file or from pretrained weights"""

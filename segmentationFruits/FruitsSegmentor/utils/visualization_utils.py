@@ -41,11 +41,13 @@ def visualize_image(image, title=""):
             else:
                 raise NotImplementedError("Can only show images with shape (height, width, channels) with channels \
                                           equal to 1 or 3")
-            plt.axis("off")
-            plt.title(title)
-            plt.show()
+        elif len(image.shape) == 2:
+            plt.imshow(image, cmap="gray")
         else:
             raise NotImplementedError("Can only show images with shape (height, width, channels) with channels \
                                                       equal to 1 or 3")
+        plt.axis("off")
+        plt.title(title)
+        plt.show()
     else:
         raise NotImplementedError("""can only visualize numpy array or path to an image""")
