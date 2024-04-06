@@ -170,3 +170,17 @@ def preprocess_input_for_prediction(image: Union[str, np.ndarray, torch.Tensor],
         image_tensor = torch.unsqueeze(image_tensor, dim=0)
 
     return image_tensor.type(torch.float)
+
+
+def check_dict_keys_for_train(dict_, keys):
+  """
+  Check if the dict contains the keys
+  """
+  for key in keys:
+    if key not in dict_:
+      raise KeyError(f"{key} is not in the dict")
+    else:
+      if not isinstance(dict_[key], str):
+        raise TypeError(f"{dict_[key]} must be a path to the data")
+      if not Path(dict_[key]).exists():
+        raise FileNotFoundError(f"{dict_[key]} is not found! please check your path!")

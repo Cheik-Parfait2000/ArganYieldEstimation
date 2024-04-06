@@ -127,32 +127,33 @@ def tile_image(image: Union[str, JpegImageFile, PngImageFile, Image.Image, np.nd
     else:
         block_shape = (path_height, patch_width)
 
-    # Tuiler l'image en pach : n_rows, n_columns, channels
+    # Tuiler l'image en patch : n_rows, n_columns, channels
     patches = view_as_blocks(image, block_shape=block_shape)
 
     return {"patches": patches, "n_rows": n_rows, "n_columns": n_columns, "block_shape": block_shape}
 
 
 def concat_tiles(tiles_list, n_rows, n_cols):
-  """
-  Concatenate tiles
-
-  input:
-    tiles_list : list of tiles [t1, t2, t3]
-    n_rows : number of rows
-    n_cols : number of columns
-
-    n_rows * n_cols = len(tiles_list)
     """
-  if len(tiles_list) != n_rows * n_cols:
-    raise ValueError(f"Number of tiles must be equal to n_rows*n_columns = {n_rows*n_cols}")
-  # Create a list of blocks concatenated horizontally
-  h_blocks = [numpy.hstack(tiles_list[i*n_cols:(i+1)*n_cols]) for i in range(n_rows)]
+      Concatenate tiles
 
-  # Créér l'image finale en empilant ces blocks horizontal verticalement
-  final_image = numpy.vstack(h_blocks)
+      input:
+        tiles_list : list of tiles [t1, t2, t3]
+        n_rows : number of rows
+        n_cols : number of columns
 
-  return final_image
+        n_rows * n_cols = len(tiles_list)
+    """
+    if len(tiles_list) != n_rows * n_cols:
+        raise ValueError(f"Number of tiles must be equal to n_rows*n_columns = {n_rows*n_cols}")
+
+    # Create a list of blocks concatenated horizontally
+    h_blocks = [np.hstack(tiles_list[i*n_cols:(i+1)*n_cols]) for i in range(n_rows)]
+
+    # Créér l'image finale en empilant ces blocks horizontal verticalement
+    final_image = np.vstack(h_blocks)
+
+    return final_image
 
 
 class MaskImageConfig(object):

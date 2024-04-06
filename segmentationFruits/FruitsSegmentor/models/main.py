@@ -6,14 +6,18 @@ from skimage.transform import resize
 
 from pathlib import Path
 
-from FruitsSegmentor.utils.errors import InvalidFileError
+from FruitsSegmentor.utils.dataset_dataloader_utilities import DatasetConfig
+from FruitsSegmentor.utils.errors import InvalidFileError, InvalidShapeError
 from FruitsSegmentor.utils.ops import check_yaml, get_unet_config, get_device, build_model_from_dict_config, \
-    correct_config_dict_for_model, preprocess_input_for_prediction
+    correct_config_dict_for_model, preprocess_input_for_prediction, check_dict_keys_for_train
 from FruitsSegmentor.utils.annotations_utilities import tile_image, concat_tiles, find_closest_dividor
+from FruitsSegmentor.utils.trainer import Trainer
 
 from typing import Callable, List, Dict, Union, Optional
 import numpy as np
 from skimage import io
+import albumentations as A
+
 
 DEFAULT_CONFIG = Path(__file__).parent.parent.resolve() / "configs" / "unet_config.pt"
 DEFAULT_CONFIG = str(DEFAULT_CONFIG).replace("\\", "/")
@@ -36,12 +40,97 @@ class SegmentationModel(nn.Module):
         self.model_config = model
         self.model_name = model_name
         self.model = None
-        self.model_building_config = dict()
+        self.model_building_config = None
         self.trainer = None
 
         # Build the model form the configuration
         self._build_model()
         self.to(get_device())
+
+    def __call__(self, x):
+        """
+        Effectuer une prédiction
+        """
+        return self.model(x)
+
+    def forward(self, x):
+        """
+        Effectuer une prédiction
+        """
+        return self.model(x)
+
+    def fit(self, donnees_dict: dict = None, augmentations: A.Compose = None, batch_size=8, image_size=640,
+            save_dir=None, epochs=100, learning_rate=0.005, optimizer=None, lr_scheduler=None, resume_training=True):
+        """Train the model
+        donnees_dict : the data to use for training :
+          - train_images: images and masks for training
+          - train_masks: masks for training
+          - val_images: images and masks for validation
+          - val_masks: masks for validation
+        batch_size : the batch size to use for training
+        image_size : the image size to use for training
+        save_dir : the directory to save the model
+        """
+        # vérifier la validité des paramètres
+        if not isinstance(epochs, int):
+            raise TypeError("epochs must be an integer")
+        if not isinstance(donnees_dict, dict):
+            raise TypeError("data must be a dictionary")
+        else:
+            check_dict_keys_for_train(dict_=donnees_dict,
+                                      keys=["train_images", "train_masks", "val_images", "val_masks"])
+        if augmentations is not None:
+            if not isinstance(augmentations, A.Compose):
+                raise TypeError("augmentations must be an instance of A.Compose")
+        if not isinstance(batch_size, int):
+            raise TypeError("batch_size must be an integer")
+        if not isinstance(image_size, int):
+            raise TypeError("image_size must be an integer")
+
+        if not isinstance(learning_rate, float):
+            raise TypeError("Learning rate should be a float")
+
+        if not isinstance(resume_training, bool):
+            raise TypeError("resume_training must be a boolean!")
+
+        if save_dir is not None and not isinstance(save_dir, str):
+            raise TypeError("save_dir must be a string")
+
+        if not Path(save_dir).parent.exists():
+            raise FileNotFoundError(f"{save_dir} not found! Check the directory!")
+        else:
+            Path(save_dir).mkdir(exist_ok=True)
+
+        if save_dir is None:
+            save_dir = str(Path().cwd() / "runs")
+            Path(save_dir).mkdir(exist_ok=True)
+
+        # --------------- Get train and val data configs --------------------
+        n_classes = self.model_building_config["classes"]
+        if n_classes == 1:
+            classes_pixels_values = [0, 255]
+            classes_names = ["background", "Cadre"]
+            labels_mapping = {0: 0, 255: 1}
+        elif n_classes == 3:
+            classes_pixels_values = [0, 128, 255]
+            classes_names = ["background", "fruit", "edge"]
+            labels_mapping = {0: 0, 128: 1, 255: 2}
+        else:
+            raise ValueError("Only 1 or 3 classes are supported!")
+
+        train_data_dict = {"images": donnees_dict["train_images"], "labels_masks": donnees_dict["train_masks"]}
+        val_data_dict = {"images": donnees_dict["val_images"], "labels_masks": donnees_dict["val_masks"]}
+        image_size = find_closest_dividor(initial_number=image_size, divisor=32)
+        train_data_cfg = DatasetConfig(batch_size, image_size, augmentations, n_classes,
+                                       classes_pixels_values, classes_names, labels_mapping,
+                                       data_config=train_data_dict)
+        val_data_cfg = DatasetConfig(batch_size, image_size, None, n_classes,
+                                     classes_pixels_values, classes_names, labels_mapping,
+                                     data_config=val_data_dict)
+        # ----------------- Send the task to to trainer --------------- data, model, epochs, save_dir
+        self.trainer = Trainer(model=self, _data={"train": train_data_cfg, "val": val_data_cfg})
+        self.trainer.train(learning_rate=learning_rate, epochs=epochs, save_dir=save_dir, optimizer=optimizer,
+                           lr_scheduler=lr_scheduler, resume_training=resume_training)
 
     def predict(self, image: Union[str, np.ndarray] = None, tilling: bool = False, tile_size: int = 360,
                 prediction_size: int = 640):
@@ -222,18 +311,17 @@ class SegmentationModel(nn.Module):
         """String representation of the model. Keep the default representation provided by Pytorch"""
         return super().__repr__()
 
-    def save(self, path):
+    def save(self, path, kwargs=None):
         """Save the model to a file
         This will save informations relative to the model' architecture along with the weights
 
-        Allowed extensions are .pt or .tar
-
+        Allowed extensions are .pt or .tar or .pth
         """
-        path_to_save = str(Path(path)).replace("\\", "/")
-        if Path(path_to_save).parent.resolve().exists():
+        if kwargs is None:
+            kwargs = {}
+        if Path(path).suffix in (".pt", ".tar", ".pth"):
             torch.save({
                 "building_config": self.model_building_config,
-                "model_state_dict": self.state_dict()
-            }, path_to_save)
-        else:
-            raise InvalidFileError(f"The path is incorrect! Cannot find the directory. Correct the path {path}.")
+                "model_state_dict": self.state_dict(),
+                **kwargs
+            }, path)
