@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
+from skimage.measure import find_contours
 from tqdm import tqdm
 
 from PIL.JpegImagePlugin import JpegImageFile
@@ -440,3 +441,73 @@ class DataPreparator(object):
 
             return patchs
 
+
+# ================== Convert mask annotation to yolov8 =========================
+def mask_annotation_to_yolov8(mask_annotation_path, reassignment_mapping={255: 0}):
+    """
+    Convert mask annotation to yolov8 format
+
+    args:
+    mask_annotation_path: path to the mask annotation
+    save_path: path to save the converted mask annotation
+    reassignment_mapping: dictionary of reassignment mapping
+
+    return:
+    objects_coordinates: list of objects coordinates that are normalized to the image shape
+    """
+
+    if isinstance(mask_annotation_path, str):
+        if not Path(mask_annotation_path).exists():
+            raise FileNotFoundError("Can't find the file")
+
+    image = np.array(Image.open(mask_annotation_path))
+    image_shape = image.shape
+    if len(reassignment_mapping.keys()) > 0:
+        for key in reassignment_mapping.keys():
+            image[image == key] = reassignment_mapping[key]
+    contours = find_contours(image)
+    objects_coordinates = []
+    for ctr in contours:
+        rows = (ctr[:, 0] / image_shape[0]).tolist() # y
+        cols = (ctr[:, 1] / image_shape[1]).tolist() # x
+        obj = []
+        for col, row in zip(cols, rows):
+            obj.append(col)
+            obj.append(row)
+        # If the contour is not closed, close it
+        if obj[0] != obj[-2] and obj[1] != obj[-1]:
+            obj.append(obj[0])
+            obj.append(obj[1])
+        objects_coordinates.append(obj)
+    return objects_coordinates
+
+
+def create_yolov8_annotations_from_masks(images_folder, save_folder, reassignment_mapping={255: 0}, class_value=0):
+    """
+    Create yolov8 annotations from masks and save them in a folder
+
+    args:
+    images_folder: path to the images folder
+    save_folder: path to save the annotations
+    reassignment_mapping: dictionary of reassignment mapping
+
+    return:
+    None
+    """
+    if not Path(images_folder).exists():
+        raise FileNotFoundError("Can't find the images folder")
+
+    Path(save_folder).mkdir(exist_ok=True)
+    list_images = list(Path(images_folder).glob("*.png"))
+    loop = tqdm(list_images, total=len(list_images), desc=f"Saving annotations to :: {save_folder}")
+    for file in loop:
+        mask_path = str(file).replace("\\", "/")
+        save_path = str(Path(save_folder) / file.name).replace("\\", "/")[:-4] + ".txt"
+        objects_coordinates = mask_annotation_to_yolov8(mask_path, reassignment_mapping)
+        with open(save_path, "w") as f:
+            for obj in objects_coordinates:
+                row = f"{class_value}"
+                for e in obj:
+                    row += f" {e}"
+                    row += "\n"
+                f.write(row)
