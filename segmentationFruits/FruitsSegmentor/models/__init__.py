@@ -1,1 +1,1 @@
-from .main import SegmentationModel
+from .cadreModel import SegmentationModel

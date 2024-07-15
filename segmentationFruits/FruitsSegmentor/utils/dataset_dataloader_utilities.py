@@ -31,7 +31,6 @@ class DatasetConfig(object):
 
     def __init__(self, batch_size: int = 8, image_size: int = 640, augmentations: A.Compose = None,
                  num_classes: int = 3, classes_pixels_values: List[int] = [0, 128, 255],
-                 classes_names: List[str] = ["background", "fruit", "edge"],
                  labels_mapping: Dict[int, int] = {0: 0, 128: 1, 255: 2},
                  data_config=None):
         self.BATCH_SIZE = batch_size
@@ -42,11 +41,13 @@ class DatasetConfig(object):
             self.AUGMENTATIONS = self.getAugs(self.IMAGE_SIZE)
         self.NUM_CLASSES = num_classes
         self.CLASSES_PIXELS_VALUES = classes_pixels_values
-        self.CLASSES_NAMES = classes_names
         self.LABELS_MAPPING = labels_mapping
 
         self.data_config = data_config
         self.LIST_IMAGES, self.LIST_ANNOTATIONS = self.getData()
+
+        print("Nombre images :", len(self.LIST_IMAGES))
+        print("Nombre annotations :", len(self.LIST_ANNOTATIONS))
 
     def getData(self):
         """
@@ -83,7 +84,7 @@ class DatasetConfig(object):
         """
 
         :param image_size:
-        :return:
+        return:
         """
         return A.Compose([
                     A.Resize(image_size, image_size)
@@ -116,9 +117,9 @@ class SegmentationDataset(Dataset):
 
     def mask_to_class_f(self, mask):
         """
-    Replaces each pixel with its class index.
-    e.g: 0 by 0, 128 by 1 and 255 by 2
-    """
+        Replaces each pixel with its class index.
+        e.g: 0 by 0, 128 by 1 and 255 by 2
+        """
         masque = np.copy(mask)
         for k in self.mapping:
             masque[mask == k] = self.mapping[k]

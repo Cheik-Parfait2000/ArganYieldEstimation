@@ -1,13 +1,17 @@
-import yaml
 import segmentation_models_pytorch as smp
 import torch
 import numpy as np
 from pathlib import Path
 from typing import Union
+
 from skimage import io
+from skimage import measure
+
 from typing import Callable
+
 from albumentations import Compose, Resize
 from albumentations.pytorch.transforms import ToTensorV2
+from scipy import ndimage
 
 from .errors import InvalidFileError, InvalidShapeError, InvalidTypeError
 
@@ -15,69 +19,6 @@ ALLOWED_IMAGES_EXTENSIONS = [".jpg", ".jpeg"]
 
 
 # ================= Quelques fonction utilitaires ==========
-def check_yaml(model_architecture="unet", config_file=None):
-    """
-  Check if the config file is valid for the given architecture.
-  We must open the file using the yaml library then check the configuration
-  it must contain some attributes.
-  """
-
-    def _check_unet_cfg(config_file):
-        """Checking for unet"""
-        return True
-
-    if model_architecture == "unet":
-        return _check_unet_cfg(config_file)
-
-
-def get_unet_config(path):
-    """
-
-  """
-    if check_yaml(model_architecture="unet", config_file=path):
-        with open(path, "r") as f:
-            config = yaml.safe_load(f)
-            model_name = config['architecture_config']['model_name']
-            encoder = config['architecture_config']['encoder_name']
-            encoder_depth = config['architecture_config']['encoder_depth']
-            encoder_weights = config['architecture_config']['encoder_weights']
-            decoder_use_batchnorm = config['architecture_config']['decoder_use_batchnorm']
-            decoder_attention_type = config['architecture_config']['decoder_attention_type']
-            decoder_channels = config['architecture_config']['decoder_channels']
-            in_channels = config['architecture_config']['in_channels']
-            n_classes = config['architecture_config']['classes']
-            activation = config['architecture_config']['activation']
-            cpkt_path = config['architecture_config']['checkpoint_path']
-
-            return {
-                "model_name": model_name,
-                "encoder_name": encoder,
-                'encoder_weights': encoder_weights,
-                "encoder_depth": encoder_depth,
-                "decoder_use_batchnorm": decoder_use_batchnorm,
-                "decoder_channels": tuple(decoder_channels),
-                "decoder_attention_type": decoder_attention_type,
-                "in_channels": in_channels,
-                "classes": n_classes,
-                "activation": activation,
-                "cpkt_path": cpkt_path
-            }
-
-
-def build_model_from_dict_config(config=None, architecture="unet"):
-    """Build a unet model from the configuration
-  args:
-    config: a dictionary containing the keywords along with their values to build
-    the model from
-    architecture: one of the base architecture available in segmentation-models-pytorch
-      "unet", "fpn", "pspnet", etc.
-  """
-    if architecture == "unet":
-        return smp.Unet(**config)
-    else:
-        raise NotImplementedError("Can only build a model for unet. please implement for others")
-
-
 def get_device():
     DEVICE = 'cpu'
     if torch.cuda.is_available():
@@ -86,21 +27,68 @@ def get_device():
     return DEVICE
 
 
-def correct_config_dict_for_model(arch="unet", config_dict=None):
-    if arch == "unet":
-        correct_attributes_unet = ["encoder_name", "encoder_depth", "encoder_weights", \
-                                   "decoder_use_batchnorm", "decoder_channels", \
-                                   "decoder_attention_type", "in_channels", "classes", "activation"]
-        correct_config = {key: config_dict[key] for key in config_dict if key in correct_attributes_unet}
+def find_good_length(initial_length: int, total_length: int):
+    """
+    Find the good length such that the total_length % good_length == 0
 
-        correct_config_ = {}
-        for key in correct_config:
-            if key in ("activation", "decoder_attention_type") and correct_config[key] in ("None", "none"):
-                correct_config_[key] = None
-            else:
-                correct_config_[key] = correct_config[key]
+    args :
+        initial_length : longueur initial
+        total_length : la longueur total
 
-        return correct_config_
+    return :
+        good_length : la longueur la plus proche de initial_length de telle sorte que
+        total_length % good_length == 0
+    """
+    good_lower_length = 0
+    good_higher_length = 0
+
+    for width1 in range(initial_length, 0, -1):
+        if total_length % width1 == 0:
+            good_lower_length = width1
+            break
+
+    for width2 in range(initial_length, total_length + 1, 1):
+        if total_length % width2 == 0:
+            good_higher_length = width2
+            break
+
+    good_length = good_lower_length
+    if abs(initial_length - good_higher_length) <= abs(initial_length - good_lower_length):
+        good_length = good_higher_length
+
+    return good_length
+
+
+def find_closest_dividor(initial_number: int, divisor: int):
+    """
+    Find a number that can be divided by the dividor such that the this number is the closest to initial_number
+
+    args :
+        initial_number : le nombre initial à diviser par le diviseur
+        divisor : le diviseur
+
+    return :
+        good_length : la longueur la plus proche de initial_length de telle sorte que
+        total_length % good_length == 0
+    """
+    good_lower_length = 0
+    good_higher_length = 0
+
+    for width1 in range(initial_number, 0, -1):
+        if width1 % divisor == 0:
+            good_lower_length = width1
+            break
+
+    for width2 in range(initial_number, initial_number + divisor + 1, 1):
+        if width2 % divisor == 0:
+            good_higher_length = width2
+            break
+
+    good_length = good_lower_length
+    if abs(initial_number - good_higher_length) <= abs(initial_number - good_lower_length):
+        good_length = good_higher_length
+
+    return good_length
 
 
 def preprocess_input_for_prediction(image: Union[str, np.ndarray, torch.Tensor],
@@ -173,14 +161,39 @@ def preprocess_input_for_prediction(image: Union[str, np.ndarray, torch.Tensor],
 
 
 def check_dict_keys_for_train(dict_, keys):
-  """
+    """
   Check if the dict contains the keys
   """
-  for key in keys:
-    if key not in dict_:
-      raise KeyError(f"{key} is not in the dict")
-    else:
-      if not isinstance(dict_[key], str):
-        raise TypeError(f"{dict_[key]} must be a path to the data")
-      if not Path(dict_[key]).exists():
-        raise FileNotFoundError(f"{dict_[key]} is not found! please check your path!")
+    for key in keys:
+        if key not in dict_:
+            raise KeyError(f"{key} is not in the dict")
+        else:
+            if not isinstance(dict_[key], str):
+                raise TypeError(f"{dict_[key]} must be a path to the data")
+            if not Path(dict_[key]).exists():
+                raise FileNotFoundError(f"{dict_[key]} is not found! please check your path!")
+
+
+def remove_smallest_blobs(input_mask):
+    """
+    Remove all the smaller blobs and only keep the biggest one
+    """
+    labels_mask = measure.label(input_mask)
+    regions = measure.regionprops(labels_mask)
+    regions.sort(key=lambda x: x.area, reverse=True)
+    if len(regions) > 1:
+        for rg in regions[1:]:
+            labels_mask[rg.coords[:, 0], rg.coords[:, 1]] = 0
+    labels_mask[labels_mask != 0] = 1
+    return labels_mask
+
+
+def post_process_mask(input_mask):
+    """
+    Ops :
+        - ne retenir que le plus grand blob
+        - remplir tous les trous
+    """
+    mask = remove_smallest_blobs(input_mask)
+    mask_final = ndimage.binary_fill_holes(mask).astype(np.uint8)
+    return mask_final

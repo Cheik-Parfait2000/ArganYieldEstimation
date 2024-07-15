@@ -15,5 +15,6 @@ setup(
     python_requires=">=3.8, <4",
     # list of packages that the module depends on. Will also be installed with the package
     install_requires=["torch", "torchvision", "scikit-image", "segmentation-models-pytorch", "numpy",
-                      "pandas", "geopandas", "albumentations", "opencv-contrib-python", "matplotlib"]
+                      "pandas", "geopandas", "albumentations", "opencv-contrib-python", "matplotlib",
+                      "patched_yolo_infer", "ultralytics"]
 )

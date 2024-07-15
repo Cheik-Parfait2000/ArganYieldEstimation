@@ -1,11 +1,152 @@
 from pathlib import Path
 
 import torch
-from segmentation_models_pytorch.losses import DiceLoss
 import segmentation_models_pytorch as smp
 from tqdm import tqdm
+from segmentation_models_pytorch.losses import JaccardLoss
+import pandas as pd
 
 from FruitsSegmentor.utils.dataset_dataloader_utilities import SegmentationDataset
+
+
+class Trainer(object):
+    def __init__(self, _data, model, epochs, save_dir, loss=None, optimizer=None, learning_rate=0.005):
+        self.data = _data
+        self.model = model
+        self.epochs = epochs
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.save_dir = save_dir
+        self.early_stopper = None
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate) if optimizer is None else optimizer
+        self.learning_rate = learning_rate
+
+        mode = "multiclass" if self.model.model_building_config["classes"] >= 3 else "binary"
+        self.loss = JaccardLoss(mode=mode, from_logits=True, eps=1e-6, log_loss=True) if loss is None else loss
+
+    def compute_loss(self, logits, masks):
+        """
+        Compute the Dice loss for the given logits and masks
+
+        logits: tensor of shape (batch_size, num_classes, height, width)
+        masks: tensor of shape (batch_size, height, width)
+        mode: "multiclass" or "binary"
+        """
+
+        loss = self.loss(logits, masks)
+        return loss
+
+    def train_epoch(self, data_loader, optimizer, epoch, n_epochs):
+        """
+        Train the model for one epoch
+        """
+        self.model.train()
+        total_loss = 0
+        loop_train = tqdm(data_loader, desc=f"Epoch {epoch} / {n_epochs}")
+        for images, masks in loop_train:
+            images, masks = images.to(self.device), masks.to(self.device)
+
+            optimizer.zero_grad()
+            logits = self.model(images)
+            loss = self.compute_loss(logits, masks)
+            loss.backward()  # Calculer les gradients de la fonction coût par rapport au paramètres du modèle
+            optimizer.step()  # Mettre à jour les paramètres du modèle
+
+            total_loss += (loss.item() / len(data_loader))
+            loss_format = "{:.5f}".format(total_loss)
+            loop_train.set_description(f"Epoch {epoch + 1} / {n_epochs}     Training... Loss = {loss_format} ")
+        return total_loss
+
+    def val_epoch(self, data_loader):
+        """
+        Evaluate the model for one epoch
+        """
+        self.model.eval()
+        with torch.no_grad():
+            total_loss = 0
+            loop_eval = tqdm(data_loader, desc="evaluating")
+            for images, masks in loop_eval:
+                images, masks = images.to(self.device), masks.to(self.device)
+                logits = self.model(images)
+                loss = self.compute_loss(logits, masks)
+
+                total_loss += (loss.item() / len(data_loader))
+                loss_format = "{:.5f}".format(total_loss)
+                loop_eval.set_description(f"               Validation... loss = {loss_format} ")
+            return total_loss
+
+    def train(self, train_checkpoint=None, patience=50):
+        """
+          Train the model for all the epochs
+        """
+        # Création des dossiers pour la sauvegarde des résultats d'entrainement
+        Path(self.save_dir).mkdir(exist_ok=True)
+        (Path(self.save_dir) / "weights").mkdir(exist_ok=True)
+        weights_path = str(Path(self.save_dir) / "weights").replace("\\", "/")
+        save_dir = str(Path(self.save_dir)).replace("\\", "/")
+        # ----------------------- Get the train and val dataloaders ---------------
+        train_loader = SegmentationDataset(self.data["train"]).load_data()
+        val_loader = SegmentationDataset(self.data["val"]).load_data()
+
+        # data_loader, optimizer, epoch, n_epochs
+
+        LR = self.learning_rate
+        optimizer = self.optimizer
+        best_val_loss = 0
+        start = 0
+        end = self.epochs
+        df = pd.DataFrame({
+            "epoch": [],
+            "train_loss": [],
+            "val_loss": []
+        })
+        """scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+             optimizer, mode="min", factor=0.5, threshold=0.001, patience=10
+        )"""
+
+        cols = ["epoch", "train_loss", "val_loss"]
+        if train_checkpoint is not None:
+            ckpt = torch.load(train_checkpoint, map_location=self.device)
+            self.model.load_state_dict(ckpt["model_state_dict"])
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            # scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+
+            start = ckpt["epoch"] + 1
+            end = start + self.epochs + 1
+            best_val_loss = ckpt["best_val_loss"]
+            df = pd.read_csv(save_dir + "/results.csv")
+            df = df[cols]
+
+        # ----------- initialize the early stopper ------------
+        # self.early_stopper = EarlyStopping(patience=patience)
+        # ---------------------- Start traning ------------------------------------
+        for epoch in range(start, end):
+
+            best_val_loss = 0
+            train_loss = self.train_epoch(train_loader, optimizer, epoch, self.epochs)
+            val_loss = self.val_epoch(val_loader)
+
+            # scheduler.step(val_loss)
+
+            if epoch == 0:
+                best_val_loss = val_loss
+            elif val_loss < best_val_loss:
+                best_val_loss = val_loss
+
+            df.loc[len(df.index)] = [epoch, train_loss, val_loss]
+            df.to_csv(save_dir + "/results.csv")
+            self.model.save(weights_path + "/best.pt")
+            self.model.save(weights_path + "/last.pt")
+            self.model.save(weights_path + "/train_checkpoint.pt",
+                            {
+                                "epoch": epoch,
+                                "optimizer_state_dict": optimizer.state_dict(),
+                                "best_val_loss": best_val_loss,
+                                "model_state_dict": self.model.state_dict()
+                            })
+            print()
+
+        # Message de fin d'entrainement
+        print(f"Fin d'entrainement du modèle. Résultats sauvegardés à {self.save_dir}")
 
 
 def compute_metrics(stats, dict_metrics={"accuracy": smp.metrics.functional.accuracy, \
@@ -35,124 +176,3 @@ def compute_metrics(stats, dict_metrics={"accuracy": smp.metrics.functional.accu
 
     return metrics_values
 
-
-def compute_loss(logits, masks, mode="multiclass"):
-    """
-  Compute the Dice loss for the given logits and masks
-
-  logits: tensor of shape (batch_size, num_classes, height, width)
-  masks: tensor of shape (batch_size, height, width)
-  mode: "multiclass" or "binary"
-  """
-    loss = DiceLoss(mode="multiclass", from_logits=True)(logits, masks)
-    loss_format = "{:.2f}".format(loss)
-    return loss, loss_format
-
-
-class Trainer(object):
-    def __init__(self, _data, model):
-        self.data = _data
-        self.model = model
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def compute_loss(self, logits, masks):
-        """
-        Compute the Dice loss for the given logits and masks
-
-        logits: tensor of shape (batch_size, num_classes, height, width)
-        masks: tensor of shape (batch_size, height, width)
-        mode: "multiclass" or "binary"
-        """
-        mode = "multiclass" if self.model.model_building_config["classes"] == 3 else "binary"
-        loss = DiceLoss(mode=mode, from_logits=True)(logits, masks)
-        return loss
-
-    def train_epoch(self, data_loader, optimizer, epoch, n_epochs):
-        """
-        Train the model for one epoch
-        """
-        self.model.train()
-        total_loss = 0
-        loop_train = tqdm(data_loader, desc="training")
-        for images, masks in loop_train:
-            images, masks = images.to(self.device), masks.to(self.device)
-
-            optimizer.zero_grad()
-            logits = self.model(images)
-            loss = self.compute_loss(logits, masks)
-            loss.backward()  # Calculer les gradients de la fonction coût par rapport au paramètres du modèle
-            optimizer.step()  # Mettre à jour les paramètres du modèle
-
-            total_loss += (loss.item() / len(data_loader))
-            loss_format = "{:.2f}".format(total_loss)
-            loop_train.set_description(f"Epoch {epoch+1} / {n_epochs}     Training... dice_loss = {loss_format}")
-        return total_loss
-
-    def val_epoch(self, data_loader):
-        """
-        Evaluate the model for one epoch
-        """
-        self.model.eval()
-        with torch.no_grad():
-            total_loss = 0
-            loop_eval = tqdm(data_loader, desc="evaluating")
-            for images, masks in loop_eval:
-                images, masks = images.to(self.device), masks.to(self.device)
-                logits = self.model(images)
-                loss = self.compute_loss(logits, masks)
-
-                total_loss += (loss.item() / len(data_loader))
-                loss_format = "{:.2f}".format(total_loss)
-                loop_eval.set_description(f"               Validation... dice_loss = {loss_format} ")
-            return total_loss
-
-    def train(self, learning_rate=0.005, epochs=100, save_dir="", optimizer=None, lr_scheduler=None,
-              resume_training=True):
-        """
-            Train the model for all the epochs
-        """
-        (Path(save_dir) / "weights").mkdir(exist_ok=True)
-        weights_path = str(Path(save_dir) / "weights").replace("\\", "/")
-        save_dir = str(Path(save_dir)).replace("\\", "/")
-
-        # ----------------------- Get the train and val dataloaders ---------------
-        train_loader = SegmentationDataset(self.data["train"]).load_data()
-        val_loader = SegmentationDataset(self.data["val"]).load_data()
-
-        LR = learning_rate
-        if optimizer is not None:
-            optimizer = optimizer(self.model.parameters(), lr=LR)
-        else:
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=LR)
-        if lr_scheduler is not None:
-            scheduler = lr_scheduler(optimizer)
-        else:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min')
-
-        # ---------------------- Start traning ------------------------------------
-        with open(save_dir + "/results.csv", 'w') as f:
-            f.write("epoch,train_loss,val_loss\n")
-            best_val_loss = 0
-            for epoch in range(epochs):
-                train_loss = self.train_epoch(train_loader, optimizer, epoch, epochs)
-                val_loss = self.val_epoch(val_loader)
-
-                # Call the scheduler to monitor to optimizer learning_rate
-                scheduler.step(val_loss)
-
-                f.write(f"{epoch+1},{train_loss},{val_loss}\n")
-                if epoch == 0:
-                    best_val_loss = val_loss
-                elif val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    self.model.save(weights_path + "/best.pt")
-
-                self.model.save(weights_path + "/last.pt")
-                # Save the model with the current epoch and the optimizer state
-                if resume_training:
-                    self.model.save(weights_path + "/train_checkpoint.pt",
-                                    {
-                                        "epoch": epoch,
-                                        "optimizer_state_dict": optimizer.state_dict(),
-                                        "best_val_loss": best_val_loss,
-                                    })
