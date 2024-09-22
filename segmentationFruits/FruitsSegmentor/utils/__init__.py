@@ -5,5 +5,6 @@ __all__ = [
     "errors",
     "ops",
     "trainer",
-    "validator"
+    "validator",
+    "images_organisation"
 ]

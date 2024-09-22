@@ -40,6 +40,7 @@ class Trainer(object):
         Train the model for one epoch
         """
         self.model.train()
+        self.model.to(self.device)
         total_loss = 0
         loop_train = tqdm(data_loader, desc=f"Epoch {epoch} / {n_epochs}")
         for images, masks in loop_train:

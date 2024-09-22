@@ -1,4 +1,4 @@
-import os, glob, json
+import os, json
 from pathlib import Path
 
 import numpy as np
@@ -8,16 +8,13 @@ from tqdm import tqdm
 
 from PIL.JpegImagePlugin import JpegImageFile
 from PIL.PngImagePlugin import PngImageFile
-# from PIL.Image import Image
 
-import skimage
 from skimage.util.shape import view_as_blocks
 from skimage import io
-from skimage.transform import resize
 
-from typing import List, Tuple, Union
+from typing import Union
 
-from .ops import find_good_length, find_closest_dividor
+from .ops import find_good_length
 
 
 def tile_image(image: Union[str, JpegImageFile, PngImageFile, Image.Image, np.ndarray],
