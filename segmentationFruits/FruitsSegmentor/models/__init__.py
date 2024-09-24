@@ -1,2 +1,3 @@
 from .cadreModel import SegmentationModel, predict_frames_masks
 from .fruitsModel import ModelSegmentationFruits, predictions_for_validation, create_frames_masks, predict_fruits_yield_by_tree
+from .treeYield import predict_tree_yield, create_adjustment_model

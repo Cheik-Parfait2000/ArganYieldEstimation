@@ -16,5 +16,5 @@ setup(
     # list of packages that the module depends on. Will also be installed with the package
     install_requires=["torch", "torchvision", "scikit-image", "segmentation-models-pytorch", "numpy",
                       "pandas", "geopandas", "albumentations", "opencv-contrib-python", "matplotlib",
-                      "patched_yolo_infer", "ultralytics"]
+                      "patched_yolo_infer", "ultralytics", "pickle"]
 )
